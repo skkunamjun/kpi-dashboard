@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import math
 import json
 import base64
 from datetime import datetime
@@ -464,6 +465,92 @@ def dark_table(df: pd.DataFrame, accent: str = "#22D3EE", height: int = None):
       </table>
     </div>"""
     st.markdown(html, unsafe_allow_html=True)
+def gauge_svg(value: float, max_value: float = 100, color: str = "#22D3EE",
+              label: str = "", unit: str = "%", size: int = 168,
+              danger_zone: bool = False, reverse: bool = False):
+    """
+    자동차 계기판 스타일 반원 게이지 (SVG).
+    value/max_value 로 0~max_value 범위를 -120°~+120° 호에 매핑.
+    danger_zone=True 면 값이 높을수록 위험(빨강)으로 색이 변함 (예: 폐강률).
+    reverse=True 면 값이 낮을수록 위험으로 간주 (필요시 확장용).
+    """
+    pct = max(0.0, min(float(value) / max_value, 1.0)) if max_value else 0.0
+    start_angle, end_angle = -120, 120
+    sweep = end_angle - start_angle
+    needle_angle = start_angle + sweep * pct
+
+    cx, cy, r = 100, 108, 78
+
+    def polar(angle_deg, radius):
+        rad = math.radians(angle_deg - 90)
+        return cx + radius * math.cos(rad), cy + radius * math.sin(rad)
+
+    # 동적 색상 (위험 구간 강조용)
+    if danger_zone:
+        if pct >= 0.66:
+            arc_color = "#F87171"
+        elif pct >= 0.4:
+            arc_color = "#FBBF24"
+        else:
+            arc_color = color
+    else:
+        arc_color = color
+
+    # 배경 트랙 (전체 호)
+    x1, y1 = polar(start_angle, r)
+    x2, y2 = polar(end_angle, r)
+    track_path = f"M {x1:.2f} {y1:.2f} A {r} {r} 0 1 1 {x2:.2f} {y2:.2f}"
+
+    # 값 호 (진행분)
+    vx, vy = polar(needle_angle, r)
+    large_arc = 1 if (needle_angle - start_angle) > 180 else 0
+    value_path = f"M {x1:.2f} {y1:.2f} A {r} {r} 0 {large_arc} 1 {vx:.2f} {vy:.2f}"
+
+    # 눈금 (10개 구간, 11개 틱)
+    ticks_svg = ""
+    n_ticks = 10
+    for i in range(n_ticks + 1):
+        a = start_angle + sweep * (i / n_ticks)
+        tx1, ty1 = polar(a, r + 7)
+        tx2, ty2 = polar(a, r - 2)
+        ticks_svg += f'<line x1="{tx1:.2f}" y1="{ty1:.2f}" x2="{tx2:.2f}" y2="{ty2:.2f}" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>'
+        if i % 5 == 0:
+            lx, ly = polar(a, r - 16)
+            ticks_svg += f'<text x="{lx:.2f}" y="{ly:.2f}" fill="#8A93A6" font-size="9" text-anchor="middle" dominant-baseline="middle">{int(max_value * i / n_ticks)}</text>'
+
+    # 바늘
+    needle_len = r - 14
+    nx, ny = polar(needle_angle, needle_len)
+    needle_base_l = polar(needle_angle + 90, 4)
+    needle_base_r = polar(needle_angle - 90, 4)
+
+    if isinstance(value, float) and not value.is_integer():
+        display_val = f"{value:.2f}" if max_value <= 10 else f"{value:.1f}"
+    else:
+        display_val = f"{int(value)}"
+
+    svg = f'''
+<svg viewBox="0 0 200 150" width="{size}" height="{int(size*0.75)}" style="display:block;margin:0 auto">
+  <defs>
+    <filter id="glow-{label}" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <path d="{track_path}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="10" stroke-linecap="round"/>
+  <path d="{value_path}" fill="none" stroke="{arc_color}" stroke-width="10" stroke-linecap="round" filter="url(#glow-{label})"/>
+  {ticks_svg}
+  <line x1="{needle_base_l[0]:.2f}" y1="{needle_base_l[1]:.2f}" x2="{nx:.2f}" y2="{ny:.2f}"
+        stroke="{arc_color}" stroke-width="3" stroke-linecap="round" filter="url(#glow-{label})"/>
+  <line x1="{needle_base_r[0]:.2f}" y1="{needle_base_r[1]:.2f}" x2="{nx:.2f}" y2="{ny:.2f}"
+        stroke="{arc_color}" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="{cx}" cy="{cy}" r="7" fill="#0E1B33" stroke="{arc_color}" stroke-width="2"/>
+  <text x="{cx}" y="{cy+34}" fill="{arc_color}" font-size="24" font-weight="700" text-anchor="middle" style="text-shadow:0 0 8px {arc_color}88">{display_val}<tspan font-size="13" fill="#8A93A6">{unit}</tspan></text>
+</svg>
+'''
+    return f'<div style="display:flex;justify-content:center;margin-top:4px">{svg}</div>'
+
+
 def progress_bar(rate: float, color: str = "#34D399", height: int = 10):
     """카드 내부용 커스텀 진행바. 텍스트는 강조색, 흰색 사용 안 함."""
     pct = min(float(rate), 100)
@@ -481,6 +568,118 @@ def progress_bar(rate: float, color: str = "#34D399", height: int = 10):
         f'box-shadow:0 0 10px {color}66"></div>'
         f'</div></div>'
     )
+
+
+def neon_track(pct: float, color: str, height: int = 16) -> str:
+    """네온 글로우 트랙 + 슬라이더형 knob. HUD 스타일 상태바의 막대 부분."""
+    pct = max(0.0, min(float(pct), 100))
+    knob = height + 10
+    return (
+        f'<div style="position:relative;height:{height}px;margin:4px 11px 0 11px">'
+        f'<div style="position:absolute;inset:0;border-radius:{height}px;'
+        f'border:1.5px solid {color}40;background:rgba(255,255,255,0.03)"></div>'
+        f'<div style="position:absolute;top:0;left:0;bottom:0;width:{pct}%;border-radius:{height}px;'
+        f'background:linear-gradient(90deg,{color}22,{color});'
+        f'box-shadow:0 0 12px {color}aa, inset 0 0 6px {color}cc"></div>'
+        f'<div style="position:absolute;top:50%;left:{pct}%;width:{knob}px;height:{knob}px;'
+        f'transform:translate(-50%,-50%);border-radius:50%;border:2px solid {color};'
+        f'background:#0E1B33;box-shadow:0 0 8px {color},0 0 18px {color}aa">'
+        f'<div style="position:absolute;top:50%;left:50%;width:5px;height:5px;'
+        f'transform:translate(-50%,-50%);border-radius:50%;background:{color};box-shadow:0 0 6px {color}"></div>'
+        f'</div></div>'
+    )
+
+
+def stat_bar(value: float, max_value: float = 100, color: str = "#22D3EE",
+             unit: str = "%", size: int = 46, bar_height: int = 16, decimals: int = 1):
+    """큰 숫자 + 네온 상태바(status bar). 백분율 등 단일 지표를 강조해서 보여줄 때 사용."""
+    pct = max(0.0, min(float(value) / max_value * 100, 100)) if max_value else 0.0
+    if float(value).is_integer():
+        display_val = f"{int(value):,}"
+    else:
+        display_val = f"{value:.{decimals}f}"
+    return (
+        f'<div style="min-height:104px;display:flex;flex-direction:column;'
+        f'justify-content:center;margin-top:8px">'
+        f'<div style="text-align:center">'
+        f'<span style="font-size:{size}px;font-weight:800;color:{color};line-height:1;'
+        f'text-shadow:0 0 16px {color}55">{display_val}</span>'
+        f'<span style="font-size:16px;font-weight:600;color:#8A93A6;margin-left:3px">{unit}</span>'
+        f'</div>'
+        f'<div style="margin-top:18px">{neon_track(pct, color, bar_height)}</div>'
+        f'</div>'
+    )
+
+
+def hbar_group(rows, max_value: float, unit: str = "명"):
+    """rows: [(label, value, color), ...] — 항목별 네온 가로 막대바 그룹."""
+    inner = ""
+    for label, value, color in rows:
+        pct = max(0.0, min(value / max_value * 100, 100)) if max_value else 0.0
+        inner += (
+            f'<div style="margin-top:12px">'
+            f'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">'
+            f'<span style="font-size:12px;color:#8A93A6">{label}</span>'
+            f'<span style="font-size:15px;font-weight:700;color:{color}">{value:,}{unit}</span>'
+            f'</div>'
+            f'{neon_track(pct, color, 12)}'
+            f'</div>'
+        )
+    return f'<div style="min-height:104px;display:flex;flex-direction:column;justify-content:center;margin-top:8px">{inner}</div>'
+
+
+def hud_gauge_svg(value: float, max_value: float = 100, color: str = "#22D3EE",
+                   label: str = "", unit: str = "%", size: int = 148, decimals: int = 1):
+    """
+    풀서클 세그먼트 HUD 게이지 (SVG).
+    바깥쪽 촘촘한 눈금 링 + 안쪽 진행률 링 + 중앙 숫자로 구성된 sci-fi 스타일 원형 게이지.
+    """
+    pct = max(0.0, min(float(value) / max_value, 1.0)) if max_value else 0.0
+    cx = cy = 70
+    r_tick = 62
+    r_ring = 50
+    circumference = 2 * math.pi * r_ring
+    dash = circumference * pct
+    gap = circumference - dash
+
+    ticks_svg = ""
+    n_ticks = 60
+    n_lit = round(n_ticks * pct)
+    for i in range(n_ticks):
+        a = math.radians((i / n_ticks) * 360 - 90)
+        tx1, ty1 = cx + r_tick * math.cos(a), cy + r_tick * math.sin(a)
+        tx2, ty2 = cx + (r_tick - 5) * math.cos(a), cy + (r_tick - 5) * math.sin(a)
+        lit = i < n_lit
+        tcolor = color if lit else "rgba(255,255,255,0.14)"
+        topac = "0.95" if lit else "0.5"
+        ticks_svg += (
+            f'<line x1="{tx1:.2f}" y1="{ty1:.2f}" x2="{tx2:.2f}" y2="{ty2:.2f}" '
+            f'stroke="{tcolor}" stroke-width="1.6" opacity="{topac}"/>'
+        )
+
+    if float(value).is_integer():
+        display_val = f"{int(value):,}"
+    else:
+        display_val = f"{value:.{decimals}f}"
+
+    svg = f'''
+<svg viewBox="0 0 140 140" width="{size}" height="{size}" style="display:block;margin:0 auto">
+  <defs>
+    <filter id="hud-{label}" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  {ticks_svg}
+  <circle cx="{cx}" cy="{cy}" r="{r_ring}" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="7"/>
+  <circle cx="{cx}" cy="{cy}" r="{r_ring}" fill="none" stroke="{color}" stroke-width="7"
+          stroke-linecap="round" stroke-dasharray="{dash:.2f} {gap:.2f}"
+          transform="rotate(-90 {cx} {cy})" filter="url(#hud-{label})"/>
+  <text x="{cx}" y="{cy+8}" text-anchor="middle" font-size="26" font-weight="800"
+        fill="{color}" style="text-shadow:0 0 10px {color}88">{display_val}<tspan font-size="13" fill="#8A93A6">{unit}</tspan></text>
+</svg>
+'''
+    return f'<div style="display:flex;justify-content:center;margin-top:4px">{svg}</div>'
 
 
 
@@ -714,39 +913,52 @@ with tab1:
         st.markdown(
             f'<div class="card cyan"><div class="card-icon">🎯</div>'
             f'<div class="card-label">목표 달성률 · 연간 목표 {TARGET_2026:,}명</div>'
-            f'<div class="card-value">{rate_2026}%</div>'
-            f'<div class="card-sub"><span class="badge {rate_badge}">{rate_text}</span></div></div>',
+            f'{stat_bar(rate_2026, 100, "#22D3EE", unit="%")}'
+            f'<div class="card-sub" style="text-align:center"><span class="badge {rate_badge}">{rate_text}</span></div></div>',
             unsafe_allow_html=True
         )
     with col2:
         st.markdown(
             f'<div class="card muted"><div class="card-icon">👥</div>'
             f'<div class="card-label">누적 수료인원 / 연간 목표</div>'
-            f'<div class="card-value" style="font-size:26px">{actual_2026:,}'
-            f'<span style="font-size:15px;color:#8A93A6"> / {TARGET_2026:,}명</span></div>'
-            f'<div class="card-sub">'
-            f'훈련비 <strong style="color:#22D3EE">{actual_train_2026:,}명</strong>'
-            f'&nbsp;·&nbsp;지원비 <strong style="color:#C084FC">{actual_supp_2026:,}명</strong>'
-            f'</div></div>',
+            f'<div class="card-value" style="font-size:32px;font-weight:800">{actual_2026:,}'
+            f'<span style="font-size:16px;color:#8A93A6;font-weight:600"> / {TARGET_2026:,}명</span></div>'
+            f'{hbar_group([("훈련비", actual_train_2026, "#22D3EE"), ("지원비", actual_supp_2026, "#C084FC")], TARGET_2026)}'
+            f'</div>',
             unsafe_allow_html=True
         )
     with col3:
         sc = "green" if avg_sat >= 4.5 else "amber"
         sc_text = "기준 충족" if avg_sat >= 4.5 else "개선 필요"
+        sc_color = "#34D399" if avg_sat >= 4.5 else "#FBBF24"
         st.markdown(
             f'<div class="card {sc}"><div class="card-icon">⭐</div>'
             f'<div class="card-label">평균 만족도</div>'
-            f'<div class="card-value">{avg_sat}<span style="font-size:16px;color:#8A93A6"> / 5.0</span></div>'
-            f'<div class="card-sub"><span class="badge {sc}">{sc_text}</span></div></div>',
+            f'<div style="min-height:104px;display:flex;flex-direction:column;'
+            f'justify-content:center;align-items:center;margin-top:8px">'
+            f'<div style="text-align:center">'
+            f'<span style="font-size:46px;font-weight:800;color:{sc_color};line-height:1;'
+            f'text-shadow:0 0 16px {sc_color}55">{avg_sat:.2f}</span>'
+            f'<span style="font-size:16px;font-weight:600;color:#8A93A6;margin-left:3px">점</span>'
+            f'</div>'
+            f'<div style="font-size:12px;color:#8A93A6;margin-top:6px">5.0점 만점</div>'
+            f'</div>'
+            f'<div class="card-sub" style="text-align:center"><span class="badge {sc}">{sc_text}</span></div></div>',
             unsafe_allow_html=True
         )
     with col4:
         cc = "green" if close_rate < 10 else "amber"
+        if close_rate >= 66:
+            close_color = "#F87171"
+        elif close_rate >= 40:
+            close_color = "#FBBF24"
+        else:
+            close_color = "#34D399"
         st.markdown(
             f'<div class="card {cc}"><div class="card-icon">📋</div>'
-            f'<div class="card-label">과정 폐강률</div>'
-            f'<div class="card-value">{close_rate}%</div>'
-            f'<div class="card-sub">{closed_cnt}개 폐강 / 전체 {total_cnt}개</div></div>',
+            f'<div class="card-label">미실시 훈련 비율</div>'
+            f'{stat_bar(close_rate, 100, close_color, unit="%")}'
+            f'<div class="card-sub" style="text-align:center">{closed_cnt}개 미실시 / 전체 {total_cnt}개</div></div>',
             unsafe_allow_html=True
         )
 
@@ -767,7 +979,9 @@ with tab1:
             f'<div class="card-label">총 집행액</div>'
             f'<div class="card-value" style="font-size:22px">{b_exec:,}'
             f'<span style="font-size:13px;color:#8A93A6">원</span></div>'
-            f'<div class="card-sub">잔액 {b_remain:,}원</div></div>',
+            f'<div class="card-sub">잔액 {b_remain:,}원</div>'
+            f'<div style="margin-top:14px">{neon_track(min(b_rate, 100), "#22D3EE", 14)}</div>'
+            f'</div>',
             unsafe_allow_html=True
         )
     with b3:
@@ -776,8 +990,7 @@ with tab1:
         st.markdown(
             f'<div class="card {bc}"><div class="card-icon">📊</div>'
             f'<div class="card-label">집행률</div>'
-            f'<div class="card-value">{b_rate}%</div>'
-            f'{progress_bar(b_rate, bc_color)}'
+            f'{hud_gauge_svg(b_rate, 100, bc_color, label="execrate", unit="%")}'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -971,9 +1184,8 @@ with tab4:
             st.markdown(
                 f'<div class="card green"><div class="card-icon">📊</div>'
                 f'<div class="card-label">전체 집행률</div>'
-                f'<div class="card-value">{grand_r}%</div>'
-                f'<div class="card-sub">잔액 {grand_b-grand_e:,}원</div>'
-                f'{progress_bar(grand_r, "#34D399")}'
+                f'{gauge_svg(grand_r, 100, "#34D399", label="grandrate", unit="%")}'
+                f'<div class="card-sub" style="text-align:center">잔액 {grand_b-grand_e:,}원</div>'
                 f'</div>',
                 unsafe_allow_html=True)
 
@@ -987,9 +1199,8 @@ with tab4:
         with i3:
             st.markdown(
                 f'<div class="card green"><div class="card-label">집행률</div>'
-                f'<div class="card-value">{infra_r}%</div>'
-                f'<div class="card-sub">잔액 {infra_b-infra_e:,}원</div>'
-                f'{progress_bar(infra_r, "#34D399")}'
+                f'{gauge_svg(infra_r, 100, "#34D399", label="infrarate", unit="%")}'
+                f'<div class="card-sub" style="text-align:center">잔액 {infra_b-infra_e:,}원</div>'
                 f'</div>',
                 unsafe_allow_html=True)
     else:
@@ -1005,9 +1216,8 @@ with tab4:
         with t3:
             st.markdown(
                 f'<div class="card green"><div class="card-label">집행률</div>'
-                f'<div class="card-value">{train_r}%</div>'
-                f'<div class="card-sub">잔액 {train_b-train_e:,}원</div>'
-                f'{progress_bar(train_r, "#34D399")}'
+                f'{gauge_svg(train_r, 100, "#34D399", label="trainrate", unit="%")}'
+                f'<div class="card-sub" style="text-align:center">잔액 {train_b-train_e:,}원</div>'
                 f'</div>',
                 unsafe_allow_html=True)
     else:
